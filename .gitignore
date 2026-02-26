@@ -9,5 +9,12 @@ target/
 *.iws
 *.ipr
 
+.claude/
+.cline/
+.clinedata/
+.cursor/
+claude-*.log
+claudeproject.json
+
 # Docker
 docker-compose.override.yml
