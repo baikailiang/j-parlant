@@ -1,0 +1,13 @@
+target/
+*.jar
+*.log
+.DS_Store
+.env
+.vscode/
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Docker
+docker-compose.override.yml

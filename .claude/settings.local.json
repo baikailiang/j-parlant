@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mvn clean compile:*)",
+      "Bash(javac:*)",
+      "Read(/mnt/d/**)",
+      "Read(/mnt/d/vue_workspace/**)",
+      "Read(/mnt/d/vue_workspace/**)",
+      "Bash(wc:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
