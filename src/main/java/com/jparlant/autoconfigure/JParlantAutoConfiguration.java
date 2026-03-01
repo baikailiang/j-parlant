@@ -17,9 +17,7 @@ import com.jparlant.service.flow.AgentFlowEngine;
 import com.jparlant.service.flow.AgentFlowManager;
 import com.jparlant.service.flow.AgentFlowWrapper;
 import com.jparlant.service.flow.evaluator.FlowExpressionEvaluator;
-import com.jparlant.service.flow.handler.action.ActionDispatcher;
-import com.jparlant.service.flow.handler.action.ActionStepHandler;
-import com.jparlant.service.flow.handler.action.FlowMetadataService;
+import com.jparlant.service.flow.handler.action.*;
 import com.jparlant.service.flow.handler.input.InputStepHandler;
 import com.jparlant.service.flow.handler.input.validation.BasicValidator;
 import com.jparlant.service.flow.handler.input.validation.FieldValidator;
@@ -375,6 +373,17 @@ public class JParlantAutoConfiguration {
     @Bean
     public FlowMetadataController flowMetadataController(FlowMetadataService flowMetadataService) {
         return new FlowMetadataController(flowMetadataService);
+    }
+
+
+    @Bean
+    public LoanCalculatorService loanCalculatorService() {
+        return new LoanCalculatorService();
+    }
+
+    @Bean
+    public RiskControlService riskControlService() {
+        return new RiskControlService();
     }
 
 }

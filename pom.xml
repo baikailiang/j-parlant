@@ -11,10 +11,33 @@
         <relativePath/>
     </parent>
 
-    <groupId>com.jparlant</groupId>
+    <groupId>io.gitee.sylvara</groupId>
     <artifactId>jparlant-spring-boot-starter</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.0.1.RELEASE</version>
     <packaging>jar</packaging>
+
+    <url>https://gitee.com/sylvara/j-parlant</url>
+
+    <licenses>
+        <license>
+            <name>The Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <name>sylvara</name>
+            <email>kb1600296@gmail.com</email>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://gitee.com/sylvara/j-parlant.git</connection>
+        <developerConnection>scm:git:git@gitee.com:sylvara/j-parlant.git</developerConnection>
+        <url>https://gitee.com/sylvara/j-parlant</url>
+    </scm>
+
 
     <name>J-Parlant Spring Boot Starter</name>
     <description>Java-based AI Agent Framework Starter</description>
@@ -175,6 +198,32 @@
                 </executions>
                 <configuration>
                     <doclint>none</doclint> <!-- 避免因为注释不规范导致构建失败 -->
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-gpg-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>sign-artifacts</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>sign</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <version>0.4.0</version>
+                <extensions>true</extensions>
+                <configuration>
+                    <publishingServerId>central</publishingServerId>
+                    <tokenAuth>true</tokenAuth>
                 </configuration>
             </plugin>
         </plugins>
