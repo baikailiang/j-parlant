@@ -97,6 +97,20 @@ public class FlowMetadataService {
         Class<?> returnType = method.getReturnType();
         Type genericReturnType = method.getGenericReturnType();
 
+        // 检查返回类型是否为 Project Reactor 的 Mono 或 Flux
+        if (returnType.getName().equals("reactor.core.publisher.Mono") ||
+                returnType.getName().equals("reactor.core.publisher.Flux")) {
+            // 如果是包装类型，提取泛型中的实际类型（例如从 Mono<Integer> 提取出 Integer）
+            if (genericReturnType instanceof ParameterizedType) {
+                ParameterizedType pt = (ParameterizedType) genericReturnType;
+                Type actualType = pt.getActualTypeArguments()[0];
+
+                // 更新当前要解析的类型为包装内的类型
+                genericReturnType = actualType;
+                returnType = this.getRawClass(actualType); // 使用你类中已有的 getRawClass 方法
+            }
+        }
+
         if (returnType == void.class || returnType == Void.class) {
             return returns;
         }
