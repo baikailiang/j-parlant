@@ -372,6 +372,7 @@ public class JParlantAutoConfiguration {
 
     @Bean
     public FlowMetadataController flowMetadataController(FlowMetadataService flowMetadataService) {
+        log.info("初始化 FlowMetadataController...");
         return new FlowMetadataController(flowMetadataService);
     }
 
