@@ -4,6 +4,8 @@ import cn.hutool.core.collection.CollectionUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.json.JsonReadFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jparlant.constant.ContextKeys;
 import com.jparlant.enums.Complexity;
@@ -470,93 +472,161 @@ public class IntentAnalysisService {
     /**
      * 解析llm结果并校验
      */
-    private IntentAnalysisResult parseAndValidate(String rawResponse, String userInput, List<AgentFlow> allowedIntents) {
+    private IntentAnalysisResult parseAndValidate(String rawResponse,
+                                                  String userInput,
+                                                  List<AgentFlow> allowedIntents) {
         if (StrUtil.isBlank(rawResponse)) return null;
-        String jsonStr = "";
-        try {
 
-            // 提取 JSON 内容 (寻找第一个 '{' 和最后一个 '}')
-            int startIndex = rawResponse.indexOf('{');
-            int endIndex = rawResponse.lastIndexOf('}');
-            if (startIndex == -1 || endIndex == -1 || startIndex >= endIndex) {
-                log.error("未在响应中找到有效的 JSON 结构: {}", rawResponse);
-                return null;
-            }
-            jsonStr = rawResponse.substring(startIndex, endIndex + 1);
-
-            // 1. 去注释
-            jsonStr = jsonStr.replaceAll("(?m)//.*$", "");
-            jsonStr = jsonStr.replaceAll("/\\*.*?\\*/", "");
-
-            // 2. 统一智能引号为标准双引号
-            jsonStr = jsonStr
-                    .replace("“", "\"")
-                    .replace("”", "\"")
-                    .replace("‘", "\"")
-                    .replace("’", "\"");
-
-            // 3. 修复全角符号
-            jsonStr = jsonStr
-                    .replace("：", ":")
-                    .replace("，", ",");
-
-            // 4. 修复单引号 key
-            jsonStr = jsonStr.replaceAll("'([^']+)'\\s*:", "\"$1\":");
-
-            // 5. 修复单引号 value
-            jsonStr = jsonStr.replaceAll(":\\s*'([^']*)'", ":\"$1\"");
-
-            // 6. 删除尾逗号
-            jsonStr = jsonStr.replaceAll(",\\s*([}\\]])", "$1");
-
-            // 7. 删除控制字符
-            jsonStr = jsonStr.replaceAll("[\\x00-\\x1F\\x7F]", "");
-
-            LLMIntentResponse dto = objectMapper.readValue(jsonStr, LLMIntentResponse.class);
-
-            // 4. 基础校验
-            if (dto == null) return null;
-
-            // 返回的结果置信度低
-            if(dto.getConfidence() <= CONFIDENCE_THRESHOLD){
-                return null;
-            }
-
-            Long intentId = dto.safeGetPrimaryIntentId();
-            if (intentId == -1L || "UNKNOWN".equalsIgnoreCase(dto.getPrimaryIntentName())) {
-                return null;
-            }
-
-            AgentFlow matchedFlow = allowedIntents.stream()
-                    .filter(f -> f.intentId().equals(intentId))
-                    .findFirst()
-                    .orElse(null);
-
-            // 返回的数据不存在
-            if (matchedFlow == null) {
-                return null;
-            }
-
-            return IntentAnalysisResult.builder()
-                    .primaryIntentId(matchedFlow.intentId())
-                    .primaryIntentName(matchedFlow.name())
-                    .confidence(dto.getConfidence())
-                    .emotion(Emotion.valueOf(dto.getEmotion()))
-                    .complexity(Complexity.valueOf(dto.getComplexity()))
-                    .extractedEntities(dto.getExtractedEntities())
-                    .userInput(userInput)
-                    .stepJump(new StepJumpDetection(
-                            dto.getStepJump().getTargetStepId(),
-                            dto.getStepJump().isJump(),
-                            dto.getStepJump().getReason()
-                    ))
-                    .activeFlow(matchedFlow)
-                    .build();
-
-        } catch (Exception e) {
-            log.error("解析 LLM 结果失败. 原始响应: {}, 处理后的字符串: {}", rawResponse, jsonStr, e);
+        String extractedJson = extractJson(rawResponse);
+        if (extractedJson == null) {
+            log.error("未提取到JSON结构: {}", rawResponse);
             return null;
         }
+
+        LLMIntentResponse dto = tryParseWithFallback(extractedJson);
+
+        if (dto == null) {
+            log.error("JSON解析失败: {}", extractedJson);
+            return null;
+        }
+
+        // ================== 业务校验 ==================
+        if (dto.getConfidence() <= CONFIDENCE_THRESHOLD) {
+            return null;
+        }
+
+        Long intentId = dto.safeGetPrimaryIntentId();
+        if (intentId == -1L || "UNKNOWN".equalsIgnoreCase(dto.getPrimaryIntentName())) {
+            return null;
+        }
+
+        AgentFlow matchedFlow = allowedIntents.stream()
+                .filter(f -> f.intentId().equals(intentId))
+                .findFirst()
+                .orElse(null);
+
+        if (matchedFlow == null) {
+            return null;
+        }
+
+        return IntentAnalysisResult.builder()
+                .primaryIntentId(matchedFlow.intentId())
+                .primaryIntentName(matchedFlow.name())
+                .confidence(dto.getConfidence())
+                .emotion(safeEnum(dto.getEmotion(), Emotion.class))
+                .complexity(safeEnum(dto.getComplexity(), Complexity.class))
+                .extractedEntities(dto.getExtractedEntities())
+                .userInput(userInput)
+                .stepJump(buildStepJump(dto))
+                .activeFlow(matchedFlow)
+                .build();
+    }
+
+
+    private String extractJson(String text) {
+        int start = text.indexOf('{');
+        if (start == -1) return null;
+
+        int braceCount = 0;
+        boolean inString = false;
+
+        for (int i = start; i < text.length(); i++) {
+            char c = text.charAt(i);
+
+            if (c == '"' && text.charAt(i - 1) != '\\') {
+                inString = !inString;
+            }
+
+            if (!inString) {
+                if (c == '{') braceCount++;
+                else if (c == '}') braceCount--;
+
+                if (braceCount == 0) {
+                    return text.substring(start, i + 1);
+                }
+            }
+        }
+        return null;
+    }
+
+
+    private LLMIntentResponse tryParseWithFallback(String json) {
+
+        // 1️⃣ 原始解析（最快）
+        try {
+            return strictMapper().readValue(json, LLMIntentResponse.class);
+        } catch (Exception ignored) {}
+
+        // 2️⃣ 宽松解析（主力）
+        try {
+            return looseMapper().readValue(json, LLMIntentResponse.class);
+        } catch (Exception ignored) {}
+
+        // 3️⃣ 轻清洗后再解析
+        try {
+            String cleaned = cleanJson(json);
+            return looseMapper().readValue(cleaned, LLMIntentResponse.class);
+        } catch (Exception ignored) {}
+
+        return null;
+    }
+
+
+    private String cleanJson(String json) {
+
+        // 去注释（支持多行）
+        json = json.replaceAll("(?s)/\\*.*?\\*/", "");
+        json = json.replaceAll("(?m)//.*$", "");
+
+        // 中文符号
+        json = json
+                .replace("：", ":")
+                .replace("，", ",")
+                .replace("“", "\"")
+                .replace("”", "\"");
+
+        // 去尾逗号
+        json = json.replaceAll(",\\s*([}\\]])", "$1");
+
+        // 不做任何“引号修复”
+        return json;
+    }
+
+
+    private <T extends Enum<T>> T safeEnum(String value, Class<T> clazz) {
+        if (value == null) return null;
+        try {
+            return Enum.valueOf(clazz, value);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private ObjectMapper strictMapper() {
+        return new ObjectMapper();
+    }
+
+    private ObjectMapper looseMapper() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.configure(JsonParser.Feature.ALLOW_SINGLE_QUOTES, true);
+        mapper.configure(JsonParser.Feature.ALLOW_UNQUOTED_FIELD_NAMES, true);
+        mapper.enable(JsonReadFeature.ALLOW_TRAILING_COMMA.mappedFeature());
+        mapper.configure(JsonParser.Feature.ALLOW_COMMENTS, true);
+        mapper.enable(JsonReadFeature.ALLOW_BACKSLASH_ESCAPING_ANY_CHARACTER.mappedFeature());
+        return mapper;
+    }
+
+
+    private StepJumpDetection buildStepJump(LLMIntentResponse dto) {
+        if (dto.getStepJump() == null) {
+            return new StepJumpDetection(null, false, null);
+        }
+
+        return new StepJumpDetection(
+                dto.getStepJump().getTargetStepId(),
+                dto.getStepJump().isJump(),
+                dto.getStepJump().getReason()
+        );
     }
 
 

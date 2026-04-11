@@ -180,7 +180,7 @@ public class AgentFlowEngine {
                     // B. 决策下一步
                     return determineNextAction(context, intent, agentFlow, currentStep, stepResult)
                             .flatMap(guidance -> {
-                                // C. 自动流转判断，如果是静默步骤（ACTION/ROUTER）且成功指向了下一步，递归执行
+                                // C. 自动流转判断，如果是静默步骤（ACTION/TRANSITION）且成功指向了下一步，递归执行
                                 if (guidance.hasNextStep() && isQuietStep(guidance.nextStep().type())) {
                                     Long nextStepId = guidance.nextStep().stepId();
                                     log.info("静默步骤 [{}] 执行完成，准备自动流转至: {}", currentStep.name(), nextStepId);
@@ -332,7 +332,7 @@ public class AgentFlowEngine {
      * 是否是静默步骤
      */
     private boolean isQuietStep(AgentFlow.FlowStep.StepType type) {
-        return type == AgentFlow.FlowStep.StepType.ACTION;
+        return type == AgentFlow.FlowStep.StepType.ACTION || type == AgentFlow.FlowStep.StepType.TRANSITION;
     }
 
 

@@ -85,6 +85,8 @@ public record AgentFlow(
              */
             ACTION,
 
+            TRANSITION,
+
             COMPLETED
         }
         
