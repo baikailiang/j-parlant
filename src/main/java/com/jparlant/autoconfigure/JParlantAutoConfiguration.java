@@ -22,6 +22,7 @@ import com.jparlant.service.flow.handler.input.InputStepHandler;
 import com.jparlant.service.flow.handler.input.validation.BasicValidator;
 import com.jparlant.service.flow.handler.input.validation.FieldValidator;
 import com.jparlant.service.flow.handler.input.validation.SpelBusinessValidator;
+import com.jparlant.service.flow.handler.transition.TransitionStepHandler;
 import com.jparlant.service.glossary.GlossaryEngine;
 import com.jparlant.service.history.ChatHistoryService;
 import com.jparlant.service.intent.IntentAnalysisService;
@@ -359,6 +360,13 @@ public class JParlantAutoConfiguration {
             List<FieldValidator> validators,  // Spring 会自动收集所有 FieldValidator Bean
             ActionDispatcher actionDispatcher) {
         return new InputStepHandler(sessionStateManager, validators, actionDispatcher);
+    }
+
+
+    @Bean
+    @ConditionalOnMissingBean
+    public TransitionStepHandler transitionStepHandler() {
+        return new TransitionStepHandler();
     }
 
 
