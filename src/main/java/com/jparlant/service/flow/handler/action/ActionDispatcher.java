@@ -191,10 +191,23 @@ public class ActionDispatcher {
         if (outputMapping == null || result == null) return;
 
         // 先将原始结果（可能是 POJO）转为 Map，这样 JsonPath 就能像读取 JSON 一样读取它了
-        Object document = (result instanceof Map || result instanceof Collection)
-                ? result
-                : objectMapper.convertValue(result, Map.class);
+        // 如果是 String, Number, Boolean, Map, Collection，直接使用，不再 convertValue
+        Object document;
+        if (result instanceof Map || result instanceof Collection ||
+                result instanceof String || result instanceof Number || result instanceof Boolean) {
+            document = result;
+        } else {
+            try {
+                // 只有真正的 POJO 对象才尝试转为 Map
+                document = objectMapper.convertValue(result, Map.class);
+            } catch (Exception e) {
+                // 如果转换失败，降级使用原始对象
+                log.warn("无法将结果转换为Map结构，将使用原始值处理: {}", result);
+                document = result;
+            }
+        }
 
+        Object finalDocument = document;
         outputMapping.forEach((sourcePath, config) -> {
             try {
                 Object rawValue;
@@ -202,12 +215,12 @@ public class ActionDispatcher {
 
                 if (config instanceof String tPath) {
                     // 使用转换后的 document
-                    rawValue = ".".equals(sourcePath) ? document : JsonPath.using(jsonPathConfig).parse(document).read(sourcePath);
+                    rawValue = safeReadJsonPath(finalDocument, sourcePath);
                     targetPath = tPath;
                 } else if (config instanceof Map mapConfig) {
                     targetPath = (String) mapConfig.get("target");
                     // 使用转换后的 document
-                    Object sourceData = ".".equals(sourcePath) ? document : JsonPath.using(jsonPathConfig).parse(document).read(sourcePath);
+                    Object sourceData = safeReadJsonPath(finalDocument, sourcePath);
 
                     if ("ARRAY".equals(mapConfig.get("type")) && sourceData instanceof Collection<?> sourceList) {
                         Map<String, String> elementMapping = (Map<String, String>) mapConfig.get("elementMapping");
@@ -226,6 +239,32 @@ public class ActionDispatcher {
             }
         });
     }
+
+
+    /**
+     * 安全地读取 JsonPath
+     */
+    private Object safeReadJsonPath(Object document, String sourcePath) {
+        if (".".equals(sourcePath)) {
+            return document;
+        }
+
+        // 如果 document 是 String 等基础类型，但 sourcePath 又不是 "."
+        // 说明配置要求从一个普通字符串里用 JsonPath 提取属性（如从 "error" 字符串里提 $.name）
+        // 这在逻辑上是不可能的，直接返回 null 并记录警告
+        if (document instanceof String || document instanceof Number || document instanceof Boolean) {
+            log.warn("数据源是基础类型，无法执行 JsonPath 提取: path={}, data={}", sourcePath, document);
+            return null;
+        }
+
+        try {
+            return JsonPath.using(jsonPathConfig).parse(document).read(sourcePath);
+        } catch (Exception e) {
+            // 捕获 JsonPath 找不到路径等异常，防止整个流程崩溃
+            return null;
+        }
+    }
+
 
     /**
      * 集合元素属性对齐转换

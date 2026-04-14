@@ -5,7 +5,6 @@ import com.jparlant.enums.Complexity;
 import com.jparlant.enums.Emotion;
 import com.jparlant.model.*;
 import com.jparlant.service.flow.handler.StepHandler;
-import com.jparlant.service.flow.handler.action.ActionDispatcher;
 import com.jparlant.service.session.SessionStateManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,8 +26,6 @@ public class AgentFlowEngine {
 
 
     private final SessionStateManager sessionStateManager;
-    private final ActionDispatcher actionDispatcher;
-
 
     // 自动注入所有处理器
     private Map<AgentFlow.FlowStep.StepType, StepHandler> stepHandlers;
@@ -124,7 +121,7 @@ public class AgentFlowEngine {
 
         log.info("流程引擎开始执行步骤处理，sessionId={}, 当前的步骤ID={}", context.sessionId(), determinedStartId);
 
-        // 3. 将确定的步骤 ID 持久化到 SessionState 中，并启动递归，逻辑：如果是静默步骤(ACTION/ROUTER)，处理完后自动进入下一步，直到需要用户输入(INPUT/CONFIRM)
+        // 3. 将确定的步骤 ID 持久化到 SessionState 中，并启动递归，逻辑：如果是静默步骤(ACTION)，处理完后自动进入下一步，直到需要用户输入(INPUT)
         final Long finalStartId = determinedStartId;
 
         Map<String, Object> updates = new HashMap<>();
@@ -180,16 +177,26 @@ public class AgentFlowEngine {
                     // B. 决策下一步
                     return determineNextAction(context, intent, agentFlow, currentStep, stepResult)
                             .flatMap(guidance -> {
-                                // C. 自动流转判断，如果是静默步骤（ACTION/TRANSITION）且成功指向了下一步，递归执行
+                                // C. 自动流转判断，如果下一步是ACTION步骤，则递归执行
                                 if (guidance.hasNextStep() && isQuietStep(guidance.nextStep().type())) {
                                     Long nextStepId = guidance.nextStep().stepId();
-                                    log.info("静默步骤 [{}] 执行完成，准备自动流转至: {}", currentStep.name(), nextStepId);
+                                    log.info("当前步骤 [{}] 执行完成，下个步骤 {} 是静默步骤，准备自动流转至这个步骤", currentStep.name(), nextStepId);
 
                                     return sessionStateManager.getSessionState(context)
                                             .flatMap(updatedState -> recursiveProcess(context, intent, updatedState, depth + 1));
                                 }
 
-                                // D. 如果是交互型步骤(INPUT/CONFIRM)，或者流程结束，则返回结果给用户
+                                // 如果下一步是 TRANSITION 步骤，则需要先将当前步骤执行完毕，然后再继续进入到下一个步骤
+                                if(guidance.hasNextStep() && AgentFlow.FlowStep.StepType.TRANSITION == guidance.nextStep().type()){
+                                    // todo 异步进入下一个步骤，
+
+                                    // 当前步骤返回
+                                    return Mono.just(guidance);
+                                }
+
+
+
+                                // D. 如果是交互型步骤(INPUT)，或者流程结束，则返回结果给用户
                                 return Mono.just(guidance);
                             });
                 })
@@ -332,7 +339,7 @@ public class AgentFlowEngine {
      * 是否是静默步骤
      */
     private boolean isQuietStep(AgentFlow.FlowStep.StepType type) {
-        return type == AgentFlow.FlowStep.StepType.ACTION || type == AgentFlow.FlowStep.StepType.TRANSITION;
+        return type == AgentFlow.FlowStep.StepType.ACTION;
     }
 
 
