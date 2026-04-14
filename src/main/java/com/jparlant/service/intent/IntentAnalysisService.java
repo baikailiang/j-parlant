@@ -437,7 +437,6 @@ public class IntentAnalysisService {
 
                 <ResponseFormat>
                 {
-                    "thinking": "用户正在回答当前步骤的问题，并未提及后续流程，因此不触发跳跃。",
                     "primaryIntentId": 1001,
                     "primaryIntentName": "办理宽带",
                     "confidence": 0.95,
@@ -448,8 +447,7 @@ public class IntentAnalysisService {
                     },
                     "stepJump": {
                         "isJump": false,
-                        "targetStepId": -1,
-                        "reason": "常规按部就班回答，无跳跃发生"
+                        "targetStepId": -1
                     }
                 }
                 </ResponseFormat>

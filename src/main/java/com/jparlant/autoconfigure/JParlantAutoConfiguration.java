@@ -220,9 +220,8 @@ public class JParlantAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public AgentFlowEngine agentFlowEngine(
-            SessionStateManager sessionStateManager,
-            ActionDispatcher actionDispatcher) {
-        return new AgentFlowEngine(sessionStateManager, actionDispatcher);
+            SessionStateManager sessionStateManager) {
+        return new AgentFlowEngine(sessionStateManager);
     }
 
     /**

@@ -84,25 +84,32 @@ public class AgentService {
                                             // 记录日志
                                             metricsService.recordChatRequest(agent.id(), result.intentName);
 
-                                            // 4. LLM 响应
-                                            return chatHistoryService.getFilteredContext(context, 10)
-                                                    .collectList()
-                                                    .flatMap(history -> callAI(result.systemPrompt(), result.modifiedInput(), history))
-                                                    .flatMap(response -> {
-                                                        String responseContent = response.getResult().getOutput().getText();
+                                            // 4. 响应
+                                            Mono<String> responseContentMono;
+                                            if (result.isDirectResponse()) {
+                                                // 如果是直接返回，内容就是 result.response()
+                                                responseContentMono = Mono.just(result.response());
+                                            } else {
+                                                // 如果不是，走原来的 LLM 调用逻辑
+                                                responseContentMono = chatHistoryService.getFilteredContext(context, 10)
+                                                        .collectList()
+                                                        .flatMap(history -> callAI(result.systemPrompt(), result.modifiedInput(), history))
+                                                        .mapNotNull(response -> response.getResult().getOutput().getText());
+                                            }
 
-                                                        // 5. 后置合规验证 (针对 AI 生成的内容，防止幻觉或泄露)
-                                                        return validateResponse(responseContent, context)
-                                                                .flatMap(validatedResponse -> {
-                                                                    ChatMessage assistantMsg = ChatMessage.assistant(validatedResponse, result.appliedGuidelines());
-                                                                    metricsService.recordChatDuration(timer, agent.id(), "llm_enhanced");
+                                            // 接下来的逻辑利用 responseContentMono 继续执行，保持后置合规和保存历史逻辑不变
+                                            return responseContentMono.flatMap(responseContent -> {
+                                                return validateResponse(responseContent, context)
+                                                        .flatMap(validatedResponse -> {
+                                                            ChatMessage assistantMsg = ChatMessage.assistant(validatedResponse, result.appliedGuidelines());
+                                                            metricsService.recordChatDuration(timer, agent.id(), result.isDirectResponse() ? "direct_hit" : "llm_enhanced");
 
-                                                                    // 6. 延长 Session 生命周期并保存历史
-                                                                    return sessionStateManager.extendSession(context.sessionId())
-                                                                            .then(chatHistoryService.saveConversationAndReturn(context.sessionId(), request.message(), assistantMsg));
-                                                                });
-                                                    });
-                                        });
+                                                            return sessionStateManager.extendSession(context.sessionId())
+                                                                    .then(chatHistoryService.saveConversationAndReturn(context.sessionId(), request.message(), assistantMsg));
+                                                        });
+                                            });
+                                        })
+                                        .last();
                             });
                 }).contextWrite(ReactiveUserContext.withUserId(request.userId()));
 
@@ -135,9 +142,23 @@ public class AgentService {
 
                                 // 3. 执行核心处理管道 (意图分析 + 流程引导)
                                 return executeFullProcessingPipeline(request.message(), request.files(), context, agent.instructions())
-                                        .flatMapMany(result -> {
+                                        .concatMap(result -> {
                                             // 记录监控指标
                                             metricsService.recordChatRequest(agent.id(), result.intentName);
+
+                                            if (result.isDirectResponse()) {
+                                                log.info("执行直接返回策略: sessionId={}, intent={}", context.sessionId(), result.intentName());
+
+                                                // 构造响应消息
+                                                ChatMessage directAssistantMsg = ChatMessage.assistant(result.response(), result.appliedGuidelines());
+
+                                                // 处理副作用并返回结果流
+                                                // 流程：延长 Session -> 保存历史记录 -> 发射消息
+                                                return sessionStateManager.extendSession(context.sessionId())
+                                                        .then(chatHistoryService.saveConversationAndReturn(context.sessionId(), request.message(), directAssistantMsg))
+                                                        .doOnSuccess(s -> metricsService.recordChatDuration(timer, agent.id(), "direct_response"))
+                                                        .thenMany(Flux.just(directAssistantMsg));
+                                            }
 
                                             // 4. 获取历史记录并调用流式 AI
                                             return chatHistoryService.getFilteredContext(context, 10)
@@ -224,16 +245,16 @@ public class AgentService {
     /**
      * 完整的处理管道
      */
-    private Mono<ProcessingPipelineResult> executeFullProcessingPipeline(String userInput, List<MultipartFile> files, Context context, String agentInstructions) {
+    private Flux<ProcessingPipelineResult> executeFullProcessingPipeline(String userInput, List<MultipartFile> files, Context context, String agentInstructions) {
         log.info("开始执行完整处理管道: userInput={}, sessionId={}", userInput, context.sessionId());
         
         return sessionStateManager.getSessionState(context)
-            .flatMap(sessionState -> {
+            .flatMapMany(sessionState -> {
                 log.info("当前会话: sessionState={}", sessionState);
                 
                 // 第一阶段：意图分析
                 return intentAnalysisService.analyzeIntent(userInput, context, sessionState, agentInstructions)
-                    .flatMap(intentResult -> {
+                    .flatMapMany(intentResult -> {
                         if(CollectionUtil.isNotEmpty(files)){
                             intentResult = intentResult.withFiles(files);
                         }
@@ -274,6 +295,20 @@ public class AgentService {
                     ? flowGuidanceResult.error()
                     : "业务流程处理异常";
             return Mono.error(new AgentFlowException(errorMessage));
+        }
+
+        // 假设 FlowStep 定义了一个 isDirectReturn() 方法，或者根据 FlowGuidanceResult 的某种状态
+        if (flowGuidanceResult.currentStep() != null && flowGuidanceResult.currentStep().isDirectReturn()) {
+            log.info("检测到直接返回配置，跳过大模型生成: step={}", flowGuidanceResult.currentStep().name());
+            String intentName = StringUtils.hasText(intentResult.primaryIntentName()) ? intentResult.primaryIntentName() : "UNKNOWN";
+
+            // 直接使用 flowGuidanceResult 中的 message 作为响应内容
+            return Mono.just(ProcessingPipelineResult.directResponse(
+                    flowGuidanceResult.message(),
+                    intentName,
+                    userInput,
+                    List.of()
+            ));
         }
 
         return sessionStateManager.getSessionState(context)

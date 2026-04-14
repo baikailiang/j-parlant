@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.HashMap;
@@ -49,20 +50,20 @@ public class AgentFlowEngine {
      * @param intentResult      意图分析阶段产出的结构化结果（包含匹配意图、提取实体等）
      * @return 包含下一步引导话术、动作指令及状态变更建议的 FlowGuidanceResult
      */
-    public Mono<FlowGuidanceResult> navigateWorkflowStep(Context context, IntentAnalysisResult intentResult) {
+    public Flux<FlowGuidanceResult> navigateWorkflowStep(Context context, IntentAnalysisResult intentResult) {
         String userInput = intentResult.userInput();
         if (!shouldProcessWorkflow(intentResult)) {
             log.info("流程引擎开始处理，意图分析结果置信度低，userInput={}, sessionId={}", userInput, context.sessionId());
-            return Mono.just(FlowGuidanceResult.error("因意图分析结果置信度低，流程引擎处理失败"));
+            return Flux.just(FlowGuidanceResult.error("因意图分析结果置信度低，流程引擎处理失败"));
         }
 
         log.info("流程引擎开始处理: userInput={}, sessionId={}", userInput, context.sessionId());
 
         return sessionStateManager.getSessionState(context)
-            .flatMap(sessionState -> executeIntelligentGuidance(context, intentResult, sessionState))
+            .flatMapMany(sessionState -> executeIntelligentGuidance(context, intentResult, sessionState))
             .onErrorResume(error -> {
                 log.error("Agent工作流引擎处理失败", error);
-                return Mono.just(FlowGuidanceResult.error("Agent工作流引擎处理失败: " + error.getMessage()));
+                return Flux.just(FlowGuidanceResult.error("Agent工作流引擎处理失败: " + error.getMessage()));
             });
     }
 
@@ -89,7 +90,7 @@ public class AgentFlowEngine {
      * 流程引擎中枢
      */
     @SuppressWarnings("unchecked")
-    private Mono<FlowGuidanceResult> executeIntelligentGuidance(Context context, IntentAnalysisResult intentResult, SessionState sessionState) {
+    private Flux<FlowGuidanceResult> executeIntelligentGuidance(Context context, IntentAnalysisResult intentResult, SessionState sessionState) {
 
         AgentFlow agentFlow = intentResult.activeFlow();
         String userInput = intentResult.userInput();
@@ -107,7 +108,7 @@ public class AgentFlowEngine {
 
             if (determinedStartId == null) {
                 log.error("流程引擎处理失败，流程配置异常：AgentId={} 的流程无步骤定义", agentFlow.agentId());
-                return Mono.just(FlowGuidanceResult.error("流程引擎处理失败，流程配置异常"));
+                return Flux.just(FlowGuidanceResult.error("流程引擎处理失败，流程配置异常"));
             }
             log.info("流程引擎处理，检测到新流程启动，初始化第一步步骤 ID: {}", determinedStartId);
         }
@@ -130,7 +131,7 @@ public class AgentFlowEngine {
 
         // 执行批量更新sessionState，确保状态完全同步后再进入递归流程
         return sessionStateManager.setVariables(context, updates)
-                .flatMap(updatedSessionState -> {
+                .flatMapMany(updatedSessionState -> {
                     log.info("流程引擎开始执行步骤处理，Session 状态更新完成，准备递归处理, sessionId={}", sessionState.sessionId());
 
                     // 注意：这里传入的是 updatedSessionState，确保后续逻辑拿到的是最新快照
@@ -143,28 +144,28 @@ public class AgentFlowEngine {
      * 处理当前步骤，寻找下一个步骤
      * 如果存在跳步，则当前步骤是跳步的那个步骤
      */
-    private Mono<FlowGuidanceResult> recursiveProcess(Context context, IntentAnalysisResult intent, SessionState sessionState, int depth) {
+    private Flux<FlowGuidanceResult> recursiveProcess(Context context, IntentAnalysisResult intent, SessionState sessionState, int depth) {
 
         AgentFlow agentFlow = intent.activeFlow();
 
         // 1. 递归深度安全检查
         if (depth > MAX_RECURSIVE_DEPTH) {
             log.error("流程流转深度超限，可能存在环路: agentId={}，intentId={}", agentFlow.agentId(), intent.primaryIntentId());
-            return Mono.just(FlowGuidanceResult.error("系统处理超时，请稍后重试"));
+            return Flux.just(FlowGuidanceResult.error("系统处理超时，请稍后重试"));
         }
 
         // 2. 从 SessionState 中获取流程是否结束的标志
         Boolean isCompleted = sessionState.getVariable(ContextKeys.Session.FLOW_COMPLETE, Boolean.class);
         if (null != isCompleted && isCompleted) {
             log.info("流程流转结束: sessionId={}", context.sessionId());
-            return Mono.just(FlowGuidanceResult.completed("流程已结束"));
+            return Flux.just(FlowGuidanceResult.completed("流程已结束"));
         }
 
         // 获取当前步骤
         Long currentStepId = sessionState.getVariable(ContextKeys.Session.CURRENT_FLOW_STEP, Long.class);
         if(null == currentStepId){
             log.error("流程处理失败，丢失了当前步骤: agentId={}，intentId={}", agentFlow.agentId(), intent.primaryIntentId());
-            return Mono.just(FlowGuidanceResult.error("请稍后重试"));
+            return Flux.just(FlowGuidanceResult.error("请稍后重试"));
         }
         AgentFlow.FlowStep currentStep = agentFlow.findStep(currentStepId);
 
@@ -172,37 +173,42 @@ public class AgentFlowEngine {
 
         // A. 执行当前步骤处理器
         return processStepWithIntent(context, intent, sessionState, currentStep)
-                .flatMap(stepResult -> {
+                .flatMapMany(stepResult -> {
 
                     // B. 决策下一步
                     return determineNextAction(context, intent, agentFlow, currentStep, stepResult)
                             .flatMap(guidance -> {
-                                // C. 自动流转判断，如果下一步是ACTION步骤，则递归执行
-                                if (guidance.hasNextStep() && isQuietStep(guidance.nextStep().type())) {
-                                    Long nextStepId = guidance.nextStep().stepId();
-                                    log.info("当前步骤 [{}] 执行完成，下个步骤 {} 是静默步骤，准备自动流转至这个步骤", currentStep.name(), nextStepId);
 
-                                    return sessionStateManager.getSessionState(context)
-                                            .flatMap(updatedState -> recursiveProcess(context, intent, updatedState, depth + 1));
+                                if (guidance.hasNextStep()){
+                                    AgentFlow.FlowStep nextStep = guidance.nextStep();
+
+                                    // C. 自动流转判断，如果下一步是ACTION步骤，则递归执行
+                                    if (isQuietStep(nextStep.type())) {
+                                        Long nextStepId = guidance.nextStep().stepId();
+                                        log.info("当前步骤 [{}] 执行完成，下个步骤 {} 是静默步骤，准备自动流转至这个步骤", currentStep.name(), nextStepId);
+
+                                        return sessionStateManager.getSessionState(context)
+                                                .flatMapMany(updatedState -> recursiveProcess(context, intent, updatedState, depth + 1));
+                                    }
+
+                                    // 如果下一步是 TRANSITION 步骤，则需要先将当前步骤执行完毕，然后再继续进入到下一个步骤
+                                    if(AgentFlow.FlowStep.StepType.TRANSITION == nextStep.type()){
+                                        // 关键：使用 Flux.concat 将“过渡提示”和“后续步骤结果”串联起来
+                                        return Flux.concat(
+                                                Mono.just(guidance), // 立即发射过渡步骤的 prompt
+                                                sessionStateManager.getSessionState(context)
+                                                        .flatMapMany(updatedState -> recursiveProcess(context, intent, updatedState, depth + 1))
+                                        );
+                                    }
                                 }
-
-                                // 如果下一步是 TRANSITION 步骤，则需要先将当前步骤执行完毕，然后再继续进入到下一个步骤
-                                if(guidance.hasNextStep() && AgentFlow.FlowStep.StepType.TRANSITION == guidance.nextStep().type()){
-                                    // todo 异步进入下一个步骤，
-
-                                    // 当前步骤返回
-                                    return Mono.just(guidance);
-                                }
-
-
 
                                 // D. 如果是交互型步骤(INPUT)，或者流程结束，则返回结果给用户
-                                return Mono.just(guidance);
+                                return Flux.just(guidance);
                             });
                 })
                 .onErrorResume(e -> {
                     log.error("工作流递归执行异常: sessionId={}, stepId={}", context.sessionId(), currentStepId, e);
-                    return Mono.just(FlowGuidanceResult.error("系统处理异常"));
+                    return Flux.just(FlowGuidanceResult.error("系统处理异常"));
                 });
     }
 
@@ -242,14 +248,15 @@ public class AgentFlowEngine {
      * 决策模型下一步的操作
      */
     @SuppressWarnings("unchecked")
-    private Mono<FlowGuidanceResult> determineNextAction(Context context, IntentAnalysisResult intentResult,
+    private Flux<FlowGuidanceResult> determineNextAction(Context context, IntentAnalysisResult intentResult,
                                                          AgentFlow agentFlow, AgentFlow.FlowStep currentStep, FlowProcessingResult stepResult) {
 
         return sessionStateManager.getSessionState(context)
-                .flatMap(sessionState -> {
+                .flatMapMany(sessionState -> {
                     // 1. 异常干预
                     return handleSpecialCase(context, intentResult)
-                            .switchIfEmpty(Mono.defer(() -> {
+                            .flux()
+                            .switchIfEmpty(Flux.defer(() -> {
 
                                 // 2. 步骤未完成：保持当前步骤，使用当前步的 prompt 引导用户补充
                                 if (!stepResult.success()) {
@@ -265,7 +272,7 @@ public class AgentFlowEngine {
                                     // 格式：[错误原因] + [请引导用户：原生引导语]
                                     String enhancedPrompt = String.format("%s\n请再次引导用户：%s", errorPart, originalPrompt);
 
-                                    return Mono.just(FlowGuidanceResult.stay(
+                                    return Flux.just(FlowGuidanceResult.stay(
                                             enhancedPrompt,
                                             currentStep
                                     ));
@@ -278,19 +285,19 @@ public class AgentFlowEngine {
                                 // 4. 流程自然结束
                                 if (nextStep == null) {
                                     log.info("流程办理完成: sessionId={}", context.sessionId());
-                                    return completeFlow(context);
+                                    return completeFlow(context).flux();
                                 }
 
                                 return sessionStateManager.setVariable(context.sessionId(), ContextKeys.Session.CURRENT_FLOW_STEP, nextStep.stepId())
-                                        .then(Mono.defer(() -> {
+                                        .thenMany(Flux.defer(() -> {
                                             log.info("Session 状态已更新，当前步骤流转至: {}", nextStep.stepId());
                                             // 5. 自动阶段转换 (Phase Transition)
                                             if (nextStep.belongToPhase() != null && nextStep.belongToPhase() != sessionState.phase()) {
-                                                return handlePhaseTransition(context, agentFlow, nextStep.belongToPhase(), nextStep.stepId());
+                                                return handlePhaseTransition(context, agentFlow, nextStep.belongToPhase(), nextStep.stepId()).flux();
                                             }
 
                                             // 6. 正常流转：返回下一步的 prompt 指令
-                                            return Mono.just(FlowGuidanceResult.continue_(
+                                            return Flux.just(FlowGuidanceResult.continue_(
                                                     nextStep.prompt(),
                                                     nextStep
                                             ));

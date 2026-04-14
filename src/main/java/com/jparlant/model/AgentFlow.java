@@ -51,7 +51,8 @@ public record AgentFlow(
             String skipToPrompt,                      // 跳跃时的引导提示
             ActionCall ocrAction,                         // 图片识别执行器
             List<ActionCall> coreActions,             // 核心执行逻辑
-            List<FlowTransition> outTransitions       // 该步骤的分支流转
+            List<FlowTransition> outTransitions,       // 该步骤的分支流转
+            boolean isDirectReturn
     ) {
 
         public record ActionCall(

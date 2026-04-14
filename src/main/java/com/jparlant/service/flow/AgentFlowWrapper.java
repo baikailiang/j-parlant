@@ -116,7 +116,7 @@ public class AgentFlowWrapper {
                 step.stepId(), step.intentId(), step.name(), step.description(),
                 step.belongToPhase(), step.type(), step.prompt(), step.expectedInputs(),
                 step.validation(), step.dependencies(), step.canSkip(), step.skipToPrompt(),
-                step.ocrAction(), step.coreActions(), outTransitions
+                step.ocrAction(), step.coreActions(), outTransitions, step.isDirectReturn()
         );
 
         result.add(stepWithTransitions);
@@ -147,7 +147,8 @@ public class AgentFlowWrapper {
                 entity.getSkipToPrompt(),
                 parseActionCall(entity.getOcrAction()),
                 parseActionCalls(entity.getCoreActionsJson()),
-                List.of()
+                List.of(),
+                entity.getIsDirectReturn() != null && entity.getIsDirectReturn() == 1
         );
     }
 
