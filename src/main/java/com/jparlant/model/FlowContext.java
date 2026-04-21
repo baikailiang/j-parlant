@@ -123,6 +123,47 @@ public class FlowContext {
             String op = opEntry.getKey().toString();
             Object value = opEntry.getValue();
 
+            // --- 新增逻辑 1: 字符串/集合 非空校验 ---
+            if ("$notEmpty".equals(op)) {
+                boolean shouldNotEmpty = Boolean.parseBoolean(value.toString());
+                boolean isActualEmpty = false;
+                if (actualValue instanceof String s) {
+                    isActualEmpty = s.trim().isEmpty();
+                } else if (actualValue instanceof Collection<?> c) {
+                    isActualEmpty = c.isEmpty();
+                } else if (actualValue instanceof Map<?, ?> m) {
+                    isActualEmpty = m.isEmpty();
+                }
+
+                // 如果要求不为空(true)但实际为空，或者要求为空(false)但实际不为空，返回 false
+                if (shouldNotEmpty == isActualEmpty) return false;
+                continue; // 处理下一个操作符
+            }
+
+            // --- 新增逻辑 2: 集合/数组/字符串 长度校验 ---
+            if ("$size".equals(op)) {
+                int actualSize = 0;
+                if (actualValue instanceof Collection<?> c) {
+                    actualSize = c.size();
+                } else if (actualValue instanceof Map<?, ?> m) {
+                    actualSize = m.size();
+                } else if (actualValue instanceof String s) {
+                    actualSize = s.length();
+                } else if (actualValue.getClass().isArray()) {
+                    actualSize = java.lang.reflect.Array.getLength(actualValue);
+                }
+
+                // $size 支持嵌套判断，例如 {"$size": {"$gt": 0}}
+                if (value instanceof Map<?, ?> subOps) {
+                    // 递归调用，此时 actualValue 变成了数值类型的 actualSize
+                    if (!evaluateOperatorCondition(subOps, actualSize)) return false;
+                } else {
+                    // 直接数值比较 {"$size": 1}
+                    if (actualSize != Integer.parseInt(value.toString())) return false;
+                }
+                continue; // 处理下一个操作符
+            }
+
             try {
                 double actualNum = Double.parseDouble(actualValue.toString());
                 double expectedNum = Double.parseDouble(value.toString());
