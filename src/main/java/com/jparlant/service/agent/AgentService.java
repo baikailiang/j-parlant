@@ -533,7 +533,7 @@ public class AgentService {
         List<Message> messages = new ArrayList<>();
 
         // 1. 系统指令通常放在最前面，确保模型行为准则优先级最高
-        messages.add(new SystemMessage(systemPrompt));
+        messages.add(new SystemMessage(StringUtils.hasText(systemPrompt) ? systemPrompt : "You are a helpful assistant."));
 
         // 2. 转换历史记录
         if (history != null) {
@@ -551,7 +551,8 @@ public class AgentService {
         }
 
         // 3. 添加当前用户消息
-        messages.add(new UserMessage(userMessage));
+        String finalInput = StringUtils.hasText(userMessage) ? userMessage : "用户上传了文件";
+        messages.add(new UserMessage(finalInput));
 
         // 返回 ChatClient 的请求规格对象，供后续 call() 或 stream() 调用
         return chatClient.prompt().messages(messages);
